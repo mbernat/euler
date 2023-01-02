@@ -3,6 +3,7 @@ use macroquad::prelude::*;
 struct Grid {
     width: usize,
     height: usize,
+    size: f32,
     u: Vec<Vec<f32>>,
     v: Vec<Vec<f32>>,
     s: Vec<Vec<f32>>,
@@ -11,7 +12,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(width: usize, height: usize) -> Grid {
+    pub fn new(width: usize, height: usize, size: f32) -> Grid {
         let zero_col = vec![0.0; height + 2];
         let one_col = vec![1.0; height + 2];
 
@@ -33,6 +34,7 @@ impl Grid {
             s[i][height + 1] = 0.0;
         }
 
+        // obstacle
         let radius = 15.0;
         let pos = vec2(width as f32 / 5.0, height as f32 / 2.0);
         for i in 1..=width {
@@ -45,10 +47,12 @@ impl Grid {
         }
 
         u[1][height / 2] = 100.0;
+        u[width + 1][height / 2] = 100.0;
 
         Grid {
             width,
             height,
+            size,
             u,
             v,
             s,   // 1.0 fluid, 0.0 solid
@@ -57,9 +61,16 @@ impl Grid {
         }
     }
 
-    fn step(&mut self, dt: f32) {
+    pub fn step(&mut self, dt: f32) {
+        self.integrate(dt);
+        self.project(dt);
+        self.advect_velocity(dt);
+        self.advect_density(dt);
+    }
+
+    fn integrate(&mut self, dt: f32) {
         // Gravity
-        let g = -9.81;
+        let g = -90.81;
 
         for i in 1..=self.width {
             for j in 1..=self.height {
@@ -68,7 +79,9 @@ impl Grid {
                 }
             }
         }
+    }
 
+    fn project(&mut self, dt: f32) {
         for i in 1..=self.width {
             for j in 1..=self.height {
                 self.p[i][j] = 0.0;
@@ -76,7 +89,6 @@ impl Grid {
         }
 
         let rho = 1000.0;
-        let size = 0.1;
         let over_relaxation = 1.9;
 
         for _iter in 0..100 {
@@ -97,11 +109,13 @@ impl Grid {
                     self.u[i + 1][j] -= d * s[i + 1][j] / ss;
                     self.v[i][j] += d * s[i][j - 1] / ss;
                     self.v[i][j + 1] -= d * s[i][j + 1] / ss;
-                    self.p[i][j] += d / ss * rho * size / dt;
+                    self.p[i][j] += d / ss * rho * self.size / dt;
                 }
             }
         }
+    }
 
+    fn advect_velocity(&mut self, dt: f32) {
         let pu = self.u.clone();
         let pv = self.v.clone();
 
@@ -114,7 +128,7 @@ impl Grid {
                     let x = vec2(i as f32, j as f32);
                     let vel = vec2(pu[i][j], v);
                     // The real grid is `size` times bigger than the integral grid.
-                    let p = x - vel * dt / size;
+                    let p = x - vel * dt / self.size;
                     self.u[i][j] = self.sample_field(&pu, p);
                 }
             }
@@ -127,12 +141,14 @@ impl Grid {
                     let u = (pu[i][j - 1] + pu[i + 1][j - 1] + pu[i][j] + pu[i + 1][j]) / 4.0;
                     let vel = vec2(u, pv[i][j]);
                     let x = vec2(i as f32, j as f32);
-                    let p = x - vel * dt / size;
+                    let p = x - vel * dt / self.size;
                     self.v[i][j] = self.sample_field(&pv, p);
                 }
             }
         }
+    }
 
+    fn advect_density(&mut self, dt: f32) {
         let pr = self.rho.clone();
 
         // Advect density
@@ -143,7 +159,7 @@ impl Grid {
                     let v = (self.v[i][j] + self.v[i][j + 1]) / 2.0;
                     let vel = vec2(u, v);
                     let x = vec2(i as f32, j as f32);
-                    let p = x - vel * dt / size;
+                    let p = x - vel * dt / self.size;
                     self.rho[i][j] = self.sample_field(&pr, p);
                 }
             }
@@ -155,8 +171,8 @@ impl Grid {
         let pj = p.y.floor();
         let x = p.x - pi;
         let y = p.y - pj;
-        let pi = (pi as usize).clamp(1, self.width + 1);
-        let pj = (pj as usize).clamp(1, self.height + 1);
+        let pi = (pi as usize).clamp(1, self.width);
+        let pj = (pj as usize).clamp(1, self.height);
         let res = field[pi][pj] * (1.0 - x) * (1.0 - y)
             + field[pi + 1][pj] * x * (1.0 - y)
             + field[pi][pj + 1] * (1.0 - x) * y
@@ -164,7 +180,7 @@ impl Grid {
         res
     }
 
-    fn render(&self) {
+    pub fn render(&self) {
         let pixels = 5.0;
         let start = vec2(0.0 - pixels, 500.0 + pixels);
 
@@ -216,7 +232,7 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut grid = Grid::new(200, 100);
+    let mut grid = Grid::new(200, 100, 0.1);
 
     let mut accu = 0.0;
     let time = 0.01;
@@ -224,7 +240,7 @@ async fn main() {
     loop {
         let dt = get_frame_time();
         accu += dt;
-        grid.step(dt);
+        grid.step(0.01);
         if accu > time {
             accu -= time;
             //     grid.step(0.01);
