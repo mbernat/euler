@@ -6,4 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bytemuck = "1.12.3"
+futures = "0.3.25"
 macroquad = "0.3.25"
+wgpu = "0.14.2"
+winit = "0.27.5"

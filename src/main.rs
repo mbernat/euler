@@ -1,4 +1,11 @@
 use macroquad::prelude::*;
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+
+mod gpu;
 
 struct Grid {
     width: usize,
@@ -191,13 +198,13 @@ impl Grid {
                 let pos = start + vec2(i as f32 * pixels, 0.0) - vec2(0.0, j as f32 * pixels);
 
                 // Velocity
-                let speed = vec2(u, v).length();
+                let _speed = vec2(u, v).length();
                 let norm = 1.0;
                 //                let color = [u.abs() / norm, v.abs() / norm, speed / norm, 1.0].into();
-                let color: Color = [u / norm, -u / norm, 0.0, 1.0].into();
+                let _color: Color = [u / norm, -u / norm, 0.0, 1.0].into();
 
                 // Pressure
-                let color: Color = [self.p[i][j] / 100000.0, 0.0, 0.0, 1.0].into();
+                let _color: Color = [self.p[i][j] / 100000.0, 0.0, 0.0, 1.0].into();
 
                 // Density
                 let rho = self.rho[i][j];
@@ -221,32 +228,65 @@ impl Grid {
     }
 }
 
-fn window_conf() -> Conf {
-    Conf {
-        window_title: "Euler".to_string(),
-        window_width: 1000,
-        window_height: 500,
-        ..Default::default()
+#[allow(dead_code)]
+mod mq {
+    use super::Grid;
+    use macroquad::prelude::*;
+
+    fn window_conf() -> Conf {
+        Conf {
+            window_title: "Euler".to_string(),
+            window_width: 1000,
+            window_height: 500,
+            ..Default::default()
+        }
+    }
+
+    #[macroquad::main(window_conf)]
+    async fn main() {
+        let mut grid = Grid::new(200, 100, 0.1);
+
+        let mut accu = 0.0;
+        let time = 0.01;
+
+        loop {
+            let dt = get_frame_time();
+            accu += dt;
+            grid.step(0.01);
+            if accu > time {
+                accu -= time;
+                //     grid.step(0.01);
+            }
+            grid.render();
+
+            next_frame().await;
+        }
     }
 }
 
-#[macroquad::main(window_conf)]
-async fn main() {
-    let mut grid = Grid::new(200, 100, 0.1);
+fn main() {
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new().build(&event_loop).unwrap();
 
-    let mut accu = 0.0;
-    let time = 0.01;
+    let shared = futures::executor::block_on(gpu::SharedState::new(&window));
 
-    loop {
-        let dt = get_frame_time();
-        accu += dt;
-        grid.step(0.01);
-        if accu > time {
-            accu -= time;
-            //     grid.step(0.01);
+    let compute = gpu::ComputeState::new(&shared);
+    //compute.run(&shared);
+
+    let render = gpu::RenderState::new(&shared);
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+            Event::RedrawRequested(_window_id) => {
+                render.run(&shared);
+            }
+            _ => (),
         }
-        grid.render();
-
-        next_frame().await;
-    }
+    });
 }
