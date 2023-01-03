@@ -197,26 +197,31 @@ impl RenderState {
 @group(0) @binding(0)
 var<storage, read_write> t: array<f32>;
 
+struct Info {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
 @vertex
-fn vertex(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> @builtin(position) vec4<f32> {
+fn vertex(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Info {
     if i == 0u {
         switch v {
-            case 0u: { return vec4(0.0, 0.0, 0.0, 1.0); }
-            case 1u: { return vec4(1.0, 0.0, 0.0, 1.0); }
-            default: { return vec4(0.0, 1.0, 0.0, 1.0); }
+            case 0u: { let v = vec4(0.0, 0.0, 0.0, 1.0); return Info(v, v); }
+            case 1u: { let v = vec4(1.0, 0.0, 0.0, 1.0); return Info(v, v); }
+            default: { let v = vec4(0.0, 1.0, 0.0, 1.0); return Info(v, v); }
         }
     } else {
         switch v {
-            case 0u: { return vec4(1.0, 0.0, 0.0, 1.0); }
-            case 1u: { return vec4(1.0, 1.0, 0.0, 1.0); }
-            default: { return vec4(0.0, 1.0, 0.0, 1.0); }
+            case 0u: { let v = vec4(1.0, 0.0, 0.0, 1.0); return Info(v, v); }
+            case 1u: { let v = vec4(1.0, 1.0, 0.0, 1.0); return Info(v, v); }
+            default: { let v = vec4(0.0, 1.0, 0.0, 1.0); return Info(v, v); }
         }
     }
 }
 
 @fragment
-fn fragment(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    return vec4(pos.x, pos.y, pos.z, 1.0);
+fn fragment(info: Info) -> @location(0) vec4<f32> {
+    return info.color;
 }
 "
             .into(),
