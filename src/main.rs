@@ -267,16 +267,12 @@ mod mq {
 fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
-
     let shared = futures::executor::block_on(gpu::SharedState::new(&window));
-
     let compute = gpu::ComputeState::new(&shared);
-    //compute.run(&shared);
-
-    let render = gpu::RenderState::new(&shared);
+    let render = gpu::RenderState::new(&shared, &compute);
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
 
         match event {
             Event::WindowEvent {
@@ -284,8 +280,10 @@ fn main() {
                 window_id,
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
             Event::RedrawRequested(_window_id) => {
+                compute.run(&shared);
                 render.run(&shared);
             }
+            Event::MainEventsCleared => window.request_redraw(),
             _ => (),
         }
     });

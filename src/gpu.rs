@@ -8,8 +8,7 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub async fn new(window: &Window) -> SharedState
-    {
+    pub async fn new(window: &Window) -> SharedState {
         let instance = Instance::new(Backends::PRIMARY);
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance
@@ -35,14 +34,17 @@ impl SharedState {
 
         let size = window.inner_size();
         let format = surface.get_supported_formats(&adapter)[0];
-        surface.configure(&device, &SurfaceConfiguration {
-            usage: TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width,
-            height: size.height,
-            present_mode: PresentMode::Fifo,
-            alpha_mode: surface.get_supported_alpha_modes(&adapter)[0],
-        });
+        surface.configure(
+            &device,
+            &SurfaceConfiguration {
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                format,
+                width: size.width,
+                height: size.height,
+                present_mode: PresentMode::Fifo,
+                alpha_mode: surface.get_supported_alpha_modes(&adapter)[0],
+            },
+        );
 
         SharedState {
             // Create resources, poll
@@ -55,39 +57,23 @@ impl SharedState {
 }
 
 pub struct ComputeState {
-    pipeline: ComputePipeline,
-    bind_group: BindGroup,
+    physics_pipeline: ComputePipeline,
+    copy_pipeline: ComputePipeline,
+    physics_bind_group: BindGroup,
+    compute_output_bind_group: BindGroup,
     storage_buffer: Buffer,
+    image_view: TextureView,
 }
 
 impl ComputeState {
     pub fn new(shared: &SharedState) -> ComputeState {
         let device = &shared.device;
-        let source = ShaderSource::Wgsl(
-            r"
-@group(0) @binding(0)
-var<storage, read_write> t: array<f32>;
-
-struct Ids {
-    @builtin(local_invocation_index) local_index: u32,
-    @builtin(global_invocation_id) global_id: vec3<u32>,
-    @builtin(workgroup_id) group_id: vec3<u32>,
-    @builtin(num_workgroups) num_groups: vec3<u32>,
-}
-
-@compute @workgroup_size(16, 16)
-fn entry(ids: Ids) {
-    let row = ids.num_groups.x * 16u;
-    let id = ids.global_id.y * row + ids.global_id.x;
-    t[id] += 1.0;
-}
-"
-            .into(),
-        );
+        let source = ShaderSource::Wgsl(include_str!("compute.wgsl").into());
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Compute shader module"),
             source,
         });
+
         let entry = BindGroupLayoutEntry {
             binding: 0,
             visibility: ShaderStages::COMPUTE,
@@ -98,45 +84,102 @@ fn entry(ids: Ids) {
             },
             count: None,
         };
-        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Compute bind group layout"),
-            entries: &[entry],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Compute pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout],
+        let physics_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Physics bind group layout"),
+                entries: &[entry],
+            });
+        let physics_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Physics pipeline layout"),
+            bind_group_layouts: &[&physics_bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("Compute compute pipeline"),
-            layout: Some(&pipeline_layout),
+        let physics_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics compute pipeline"),
+            layout: Some(&physics_pipeline_layout),
             module: &shader_module,
-            entry_point: "entry",
+            entry_point: "compute",
         });
 
-        let values = [0.0; 16 * 16];
+        let entry = BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::COMPUTE | ShaderStages::FRAGMENT,
+            ty: BindingType::StorageTexture {
+                access: StorageTextureAccess::WriteOnly,
+                format: TextureFormat::Rgba8Unorm,
+                view_dimension: TextureViewDimension::D2,
+            },
+            count: None,
+        };
+        let compute_output_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Compute output bind group layout"),
+                entries: &[entry],
+            });
+        let copy_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Copy pipeline layout"),
+            bind_group_layouts: &[
+                &physics_bind_group_layout,
+                &compute_output_bind_group_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+        let copy_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Copy compute pipeline"),
+            layout: Some(&copy_pipeline_layout),
+            module: &shader_module,
+            entry_point: "copy",
+        });
+
+        const SIZE: (usize, usize) = (256, 256);
+        let values = &[0.0; SIZE.0 * SIZE.1];
         let storage_buffer = {
             use util::DeviceExt;
             device.create_buffer_init(&util::BufferInitDescriptor {
-                label: Some("Compute storage buffer"),
-                contents: bytemuck::bytes_of(&values),
+                label: Some("Physics storage buffer"),
+                contents: bytemuck::cast_slice(values),
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             })
         };
-        let entry = BindGroupEntry {
-            binding: 0,
-            resource: storage_buffer.as_entire_binding(),
-        };
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Compute bind group"),
-            layout: &bind_group_layout,
-            entries: &[entry],
+        let physics_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Physics bind group"),
+            layout: &physics_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: storage_buffer.as_entire_binding(),
+            }],
+        });
+
+        let img = device.create_texture(&TextureDescriptor {
+            label: Some("Copy output texture"),
+            size: Extent3d {
+                width: SIZE.0 as u32,
+                height: SIZE.1 as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        });
+        let img_view = img.create_view(&TextureViewDescriptor::default());
+        let compute_output_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Copy bind group"),
+            layout: &compute_output_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&img_view),
+            }],
         });
 
         ComputeState {
-            pipeline,
-            bind_group,
+            physics_pipeline,
+            copy_pipeline,
+            physics_bind_group,
+            compute_output_bind_group,
             storage_buffer,
+            image_view: img_view,
         }
     }
 
@@ -151,12 +194,24 @@ fn entry(ids: Ids) {
         let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Compute compute pass"),
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.physics_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
         // Each axis: grid size = 256, workgroup_size = 16, num groups = 16
-        pass.dispatch_workgroups(1, 1, 1);
+        pass.dispatch_workgroups(16, 16, 1);
+        pass.set_pipeline(&self.copy_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+        pass.set_bind_group(1, &self.compute_output_bind_group, &[]);
+        pass.dispatch_workgroups(16, 16, 1);
         drop(pass);
+        shared.queue.submit(Some(encoder.finish()));
+    }
 
+    fn inspect(&self, shared: &SharedState) {
+        let mut encoder = shared
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Compute copy encoder"),
+            });
         let size = self.storage_buffer.size();
         let output_buffer = shared.device.create_buffer(&BufferDescriptor {
             label: Some("Compute output buffer"),
@@ -181,72 +236,40 @@ fn entry(ids: Ids) {
     }
 }
 
-
-
 pub struct RenderState {
     pipeline: RenderPipeline,
     bind_group: BindGroup,
-    storage_buffer: Buffer,
 }
 
 impl RenderState {
-    pub fn new(shared: &SharedState) -> RenderState {
+    pub fn new(shared: &SharedState, compute: &ComputeState) -> RenderState {
         let device = &shared.device;
-        let source = ShaderSource::Wgsl(
-            r"
-@group(0) @binding(0)
-var<storage, read_write> t: array<f32>;
-
-struct Info {
-    // Values in -1..1 in the vertex shader but in 0..screen_res in the fragment shader
-    @builtin(position) pos: vec4<f32>,
-    @location(0) fraction: vec4<f32>,
-}
-
-@vertex
-fn vertex(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> Info {
-    var pos: vec2<f32>;
-    if i == 0u {
-        switch v {
-            case 0u: { pos = vec2(-1.0, -1.0); }
-            case 1u: { pos = vec2(1.0, -1.0); }
-            default: { pos = vec2(-1.0, 1.0); }
-        }
-    } else {
-        switch v {
-            case 0u: { pos = vec2(1.0, -1.0); }
-            case 1u: { pos = vec2(1.0, 1.0); }
-            default: { pos = vec2(-1.0, 1.0); }
-        }
-    }
-    let uni = (pos + 1.0) / 2.0;
-    return Info(vec4(pos, 0.0, 1.0), vec4(uni, 0.5, 1.0));
-}
-
-@fragment
-fn fragment(info: Info) -> @location(0) vec4<f32> {
-    return info.fraction;
-}
-"
-            .into(),
-        );
+        let source = ShaderSource::Wgsl(include_str!("render.wgsl").into());
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Render shader module"),
             source,
         });
-        let entry = BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::FRAGMENT,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
+
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Render bind group layout"),
-            entries: &[entry],
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Render pipeline layout"),
@@ -254,7 +277,7 @@ fn fragment(info: Info) -> @location(0) vec4<f32> {
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Render compute pipeline"),
+            label: Some("Render render pipeline"),
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: &shader_module,
@@ -277,35 +300,45 @@ fn fragment(info: Info) -> @location(0) vec4<f32> {
             multiview: None,
         });
 
-        let values = [0.0; 16 * 16];
-        let storage_buffer = {
-            use util::DeviceExt;
-            device.create_buffer_init(&util::BufferInitDescriptor {
-                label: Some("Render storage buffer"),
-                contents: bytemuck::bytes_of(&values),
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-            })
-        };
-        let entry = BindGroupEntry {
-            binding: 0,
-            resource: storage_buffer.as_entire_binding(),
-        };
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Compute output sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
+            mipmap_filter: FilterMode::Nearest,
+            ..Default::default()
+        });
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Render bind group"),
             layout: &bind_group_layout,
-            entries: &[entry],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&compute.image_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&sampler),
+                },
+            ],
         });
 
         RenderState {
             pipeline,
             bind_group,
-            storage_buffer,
         }
     }
 
     pub fn run(&self, shared: &SharedState) {
-        let surface_texture = shared.surface.get_current_texture().expect("Valid surface texture");
-        let view = surface_texture.texture.create_view(&TextureViewDescriptor::default());
+        let surface_texture = shared
+            .surface
+            .get_current_texture()
+            .expect("Valid surface texture");
+        let view = surface_texture
+            .texture
+            .create_view(&TextureViewDescriptor::default());
 
         let mut encoder = shared
             .device
