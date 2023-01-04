@@ -57,7 +57,13 @@ impl SharedState {
 }
 
 pub struct ComputeState {
-    physics_pipeline: ComputePipeline,
+    integrate_pipeline: ComputePipeline,
+    gather_pipeline: ComputePipeline,
+    scatter_bl_pipeline: ComputePipeline,
+    scatter_tr_pipeline: ComputePipeline,
+    advect_u_pipeline: ComputePipeline,
+    advect_v_pipeline: ComputePipeline,
+    advect_density_pipeline: ComputePipeline,
     copy_pipeline: ComputePipeline,
     physics_bind_group: BindGroup,
     compute_output_bind_group: BindGroup,
@@ -94,11 +100,48 @@ impl ComputeState {
             bind_group_layouts: &[&physics_bind_group_layout],
             push_constant_ranges: &[],
         });
-        let physics_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("Physics compute pipeline"),
+
+        let integrate_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics integrate pipeline"),
             layout: Some(&physics_pipeline_layout),
             module: &shader_module,
-            entry_point: "compute",
+            entry_point: "integrate",
+        });
+        let gather_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics gather pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "gather",
+        });
+        let scatter_bl_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics scatter bottom left pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "scatter_bottom_left",
+        });
+        let scatter_tr_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics scatter top right pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "scatter_top_right",
+        });
+        let advect_u_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics advect u pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "advect_u",
+        });
+        let advect_v_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics advect v pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "advect_v",
+        });
+        let advect_density_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Physics advect density pipeline"),
+            layout: Some(&physics_pipeline_layout),
+            module: &shader_module,
+            entry_point: "advect_density",
         });
 
         let entry = BindGroupLayoutEntry {
@@ -131,13 +174,58 @@ impl ComputeState {
             entry_point: "copy",
         });
 
+        use bytemuck::Zeroable;
+        use bytemuck::Pod;
+        #[derive(Clone, Copy, Zeroable, Pod)]
+        #[repr(C)]
+        struct Point {
+            u: f32,
+            v: f32,
+            s: f32,
+            rho: f32,
+            avg_div: f32,
+            nu: f32,
+            nv: f32,
+            nrho: f32,
+        }
+
         const SIZE: (usize, usize) = (256, 256);
-        let values = &[0.0; SIZE.0 * SIZE.1];
+        let init = Point{u: 0.0, v: 0.0, s: 1.0, rho: 0.0, avg_div: 0.0, nu: 0.0, nv: 0.0, nrho: 0.0};
+        let mut values = vec![init; SIZE.0 * SIZE.1];
+
+        // Walls
+        for i in 0..SIZE.0 {
+            values[i].s = 0.0;
+            values[(SIZE.1 - 1) * SIZE.0 + i].s = 0.0;
+        }
+        for j in 0..SIZE.1 {
+            values[j * SIZE.0].s = 0.0;
+            values[(j + 1) * SIZE.0 - 1].s = 0.0;
+        }
+
+        let radius: i32 = 20;
+        let pos = (50, 128);
+        // Obstacle
+        for i in 0..SIZE.0 {
+            for j in 0..SIZE.1 {
+                let sq_dist = (i as i32 - pos.0).pow(2) + (j as i32 - pos.1).pow(2);
+                if sq_dist <= radius.pow(2) {
+                    let index = i as usize + j as usize * SIZE.0;
+                    values[index].s = 0.0;
+                    values[index].rho = 1.0;
+                }
+            }
+        }
+
+        // Inflow from the left
+        values[256 * 128 + 1].u = 100.0;
+
+
         let storage_buffer = {
             use util::DeviceExt;
             device.create_buffer_init(&util::BufferInitDescriptor {
                 label: Some("Physics storage buffer"),
-                contents: bytemuck::cast_slice(values),
+                contents: bytemuck::cast_slice(&values[..]),
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             })
         };
@@ -174,7 +262,13 @@ impl ComputeState {
         });
 
         ComputeState {
-            physics_pipeline,
+            integrate_pipeline,
+            gather_pipeline,
+            scatter_bl_pipeline,
+            scatter_tr_pipeline,
+            advect_u_pipeline,
+            advect_v_pipeline,
+            advect_density_pipeline,
             copy_pipeline,
             physics_bind_group,
             compute_output_bind_group,
@@ -194,14 +288,45 @@ impl ComputeState {
         let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Compute compute pass"),
         });
-        pass.set_pipeline(&self.physics_pipeline);
-        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+
         // Each axis: grid size = 256, workgroup_size = 16, num groups = 16
-        pass.dispatch_workgroups(16, 16, 1);
+        let groups = 256 / 16;
+
+        pass.set_pipeline(&self.integrate_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+        pass.dispatch_workgroups(groups, groups, 1);
+
+        for _ in 0..1000 {
+            pass.set_pipeline(&self.gather_pipeline);
+            pass.set_bind_group(0, &self.physics_bind_group, &[]);
+            pass.dispatch_workgroups(groups, groups, 1);
+
+            pass.set_pipeline(&self.scatter_bl_pipeline);
+            pass.set_bind_group(0, &self.physics_bind_group, &[]);
+            pass.dispatch_workgroups(groups, groups, 1);
+
+            pass.set_pipeline(&self.scatter_tr_pipeline);
+            pass.set_bind_group(0, &self.physics_bind_group, &[]);
+            pass.dispatch_workgroups(groups, groups, 1);
+        }
+
+        pass.set_pipeline(&self.advect_u_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+        pass.dispatch_workgroups(groups, groups, 1);
+
+        pass.set_pipeline(&self.advect_v_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+        pass.dispatch_workgroups(groups, groups, 1);
+
+        pass.set_pipeline(&self.advect_density_pipeline);
+        pass.set_bind_group(0, &self.physics_bind_group, &[]);
+        pass.dispatch_workgroups(groups, groups, 1);
+
         pass.set_pipeline(&self.copy_pipeline);
         pass.set_bind_group(0, &self.physics_bind_group, &[]);
         pass.set_bind_group(1, &self.compute_output_bind_group, &[]);
-        pass.dispatch_workgroups(16, 16, 1);
+        let groups = 256 / 16;
+        pass.dispatch_workgroups(groups, groups, 1);
         drop(pass);
         shared.queue.submit(Some(encoder.finish()));
     }
@@ -352,7 +477,7 @@ impl RenderState {
                 view: &view,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(Color::BLUE),
+                    load: LoadOp::Clear(Color::BLACK),
                     store: true,
                 },
             })],
