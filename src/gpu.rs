@@ -217,9 +217,10 @@ impl ComputeState {
             }
         }
 
-        // Inflow from the left
+        // Inflow from the center left
         values[256 * 128 + 1].u = 100.0;
-
+        // Outflow into center right
+        values[256 * 128 + 255].u = 100.0;
 
         let storage_buffer = {
             use util::DeviceExt;
@@ -325,8 +326,8 @@ impl ComputeState {
         pass.set_pipeline(&self.copy_pipeline);
         pass.set_bind_group(0, &self.physics_bind_group, &[]);
         pass.set_bind_group(1, &self.compute_output_bind_group, &[]);
-        let groups = 256 / 16;
         pass.dispatch_workgroups(groups, groups, 1);
+
         drop(pass);
         shared.queue.submit(Some(encoder.finish()));
     }
@@ -391,7 +392,7 @@ impl RenderState {
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -430,9 +431,9 @@ impl RenderState {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Nearest,
-            min_filter: FilterMode::Nearest,
-            mipmap_filter: FilterMode::Nearest,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Linear,
             ..Default::default()
         });
         let bind_group = device.create_bind_group(&BindGroupDescriptor {

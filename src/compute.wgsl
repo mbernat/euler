@@ -103,14 +103,17 @@ fn advect_u(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     let here = field[index];
+    field[index].nu = here.u;
     if here.s == 1.0 && field[index - 1u].s == 1.0 {
         let u = here.u;
         let v = (here.v + field[index - 1u].v + field[index + row_size].v + field[index + row_size - 1u].v) / 4.0;
         // TODO try abstracting field sampling
         let p = vec2<f32>(ids.global_id.xy) - vec2(u, v) * dt / cell_size;
-        let p_id = vec2<u32>(floor(p));
+        let pf = vec2<u32>(floor(p));
+        let p_id = clamp(vec2<u32>(floor(p)), vec2(1u, 1u), vec2(row_size - 1u, row_size - 1u));
         let b = p - floor(p);
-        let a = 1.0 - b;
+//        let a = 1.0 - b;
+        let a = vec2(1.0, 1.0) - b;
         let p_index = p_id.y * row_size + p_id.x;
         let nu =
               field[p_index].u * a.x * a.y
@@ -129,13 +132,15 @@ fn advect_v(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     let here = field[index];
+    field[index].nv = here.v;
     if here.s == 1.0 && field[index - row_size].s == 1.0 {
         let u = (here.u + field[index - row_size].u + field[index + 1u].u + field[index - row_size + 1u].u) / 4.0;
         let v = here.v;
         let p = vec2<f32>(ids.global_id.xy) - vec2(u, v) * dt / cell_size;
-        let p_id = vec2<u32>(floor(p));
+        let p_id = clamp(vec2<u32>(floor(p)), vec2(1u, 1u), vec2(row_size - 1u, row_size - 1u));
         let b = p - floor(p);
-        let a = 1.0 - b;
+//        let a = 1.0 - b;
+        let a = vec2(1.0, 1.0) - b;
         let p_index = p_id.y * row_size + p_id.x;
         let nv =
               field[p_index].v * a.x * a.y
@@ -178,11 +183,13 @@ fn copy(ids: Ids) {
     let f = field[id];
     field[id].u = f.nu;
     field[id].v = f.nv;
-    // Copy velocity before advecting density
+    // TODO Copy velocity before advecting density
     field[id].rho = f.nrho;
     let f = field[id];
     let speed = length(vec2(f.u, f.v));
-    //let color = vec4(abs(f.u) / 10.0, speed / 100.0, (f.v + 5.0) / 10.0, f.s);
-    let color = vec4(f.rho, f.rho, f.rho, 1.0);
+    let norm = 10.0;
+    //let color = vec4(f.u / norm, 0.0, -f.u / norm, f.s);
+    let color = vec4(abs(f.u) / norm, 0.0, abs(f.v) / norm, f.s);
+    //let color = vec4(f.rho, f.rho, f.rho, 1.0);
     textureStore(output, vec2<i32>(ids.global_id.xy), color);
 }

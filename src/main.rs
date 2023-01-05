@@ -54,7 +54,7 @@ impl Grid {
         }
 
         u[1][height / 2] = 100.0;
-        u[width + 1][height / 2] = 100.0;
+        //u[width + 1][height / 2] = 100.0;
 
         Grid {
             width,
@@ -77,7 +77,7 @@ impl Grid {
 
     fn integrate(&mut self, dt: f32) {
         // Gravity
-        let g = -90.81;
+        let g = -9.81;
 
         for i in 1..=self.width {
             for j in 1..=self.height {
@@ -95,7 +95,7 @@ impl Grid {
             }
         }
 
-        let rho = 1000.0;
+        let rho_liquid = 1000.0;
         let over_relaxation = 1.9;
 
         for _iter in 0..100 {
@@ -116,7 +116,7 @@ impl Grid {
                     self.u[i + 1][j] -= d * s[i + 1][j] / ss;
                     self.v[i][j] += d * s[i][j - 1] / ss;
                     self.v[i][j + 1] -= d * s[i][j + 1] / ss;
-                    self.p[i][j] += d / ss * rho * self.size / dt;
+                    self.p[i][j] += d / ss * rho_liquid * self.size / dt;
                 }
             }
         }
@@ -199,16 +199,17 @@ impl Grid {
 
                 // Velocity
                 let _speed = vec2(u, v).length();
-                let norm = 1.0;
-                //                let color = [u.abs() / norm, v.abs() / norm, speed / norm, 1.0].into();
-                let _color: Color = [u / norm, -u / norm, 0.0, 1.0].into();
+                let norm = 10.0;
+                //let color = [u.abs() / norm, v.abs() / norm, speed / norm, 1.0].into();
+                let color: Color = [u.abs() / norm, 0.0, v.abs() / norm, 1.0].into();
+                //let color: Color = [u / norm, 0.0, -u / norm, 1.0].into();
 
                 // Pressure
                 let _color: Color = [self.p[i][j] / 100000.0, 0.0, 0.0, 1.0].into();
 
                 // Density
                 let rho = self.rho[i][j];
-                let color = [rho, 0.0, 0.0, 1.0].into();
+                //let color = [rho, 0.0, 0.0, 1.0].into();
 
                 draw_rectangle(pos.x, pos.y, pixels, pixels, color);
             }
@@ -222,49 +223,44 @@ impl Grid {
                 let pos = pos + vec2(pixels / 2.0, -pixels / 2.0);
                 let d = vec2(u, v) * 2.0;
                 let color: Color = [0.0, 0.0, 1.0, 0.3].into();
-                draw_line(pos.x, pos.y, pos.x + d.x, pos.y - d.y, 1.0, color);
+                //draw_line(pos.x, pos.y, pos.x + d.x, pos.y - d.y, 1.0, color);
             }
         }
     }
 }
 
-#[allow(dead_code)]
-mod mq {
-    use super::Grid;
-    use macroquad::prelude::*;
+async fn amain() {
+    let mut grid = crate::Grid::new(200, 100, 0.1);
 
-    fn window_conf() -> Conf {
-        Conf {
-            window_title: "Euler".to_string(),
-            window_width: 1000,
-            window_height: 500,
-            ..Default::default()
+    let mut accu = 0.0;
+    let time = 0.01;
+
+    loop {
+        let dt = get_frame_time();
+        accu += dt;
+        grid.step(0.01);
+        if accu > time {
+            accu -= time;
+            //     grid.step(0.01);
         }
-    }
+        grid.render();
 
-    #[macroquad::main(window_conf)]
-    async fn main() {
-        let mut grid = Grid::new(200, 100, 0.1);
-
-        let mut accu = 0.0;
-        let time = 0.01;
-
-        loop {
-            let dt = get_frame_time();
-            accu += dt;
-            grid.step(0.01);
-            if accu > time {
-                accu -= time;
-                //     grid.step(0.01);
-            }
-            grid.render();
-
-            next_frame().await;
-        }
+        next_frame().await;
     }
 }
 
-fn main() {
+fn cpu_main() {
+    let config = Conf {
+        window_title: "Euler".to_string(),
+        window_width: 1000,
+        window_height: 500,
+        ..Default::default()
+    };
+
+    macroquad::Window::from_config(config, amain());
+}
+
+fn gpu_main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let shared = futures::executor::block_on(gpu::SharedState::new(&window));
@@ -287,4 +283,11 @@ fn main() {
             _ => (),
         }
     });
+}
+
+fn main() {
+    #[cfg(not(debug_assertions))]
+    cpu_main();
+    #[cfg(debug_assertions)]
+    gpu_main();
 }
