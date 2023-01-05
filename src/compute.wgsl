@@ -47,19 +47,15 @@ fn gather(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     //let index = get_id(ids.global_id, ids.num_groups, 1u);
-    let here = field[index];
-    if here.s == 1.0 {
-        let l = index - 1u;
-        let r = index + 1u;
-        let b = index - row_size;
-        let t = index + row_size;
-        let left = field[l];
-        let right = field[r];
-        let bottom = field[b];
-        let top = field[t];
+    let here = &field[index];
+    if (*here).s == 1.0 {
+        let left = field[index - 1u];
+        let right = field[index + 1u];
+        let bottom = field[index - row_size];
+        let top = field[index + row_size];
         let s = left.s + right.s + bottom.s + top.s;
-        let avg_div = (right.u - here.u + top.v - here.v) / s;
-        field[index].avg_div = avg_div;
+        let avg_div = (right.u - (*here).u + top.v - (*here).v) / s;
+        (*here).avg_div = avg_div;
     }
 }
 
@@ -69,10 +65,8 @@ fn scatter_bottom_left(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     if field[index].s == 1.0 {
-        let l = index - 1u;
-        let b = index - row_size;
-        let left = field[l];
-        let bottom = field[b];
+        let left = field[index - 1u];
+        let bottom = field[index - row_size];
         let avg_div = field[index].avg_div;
         field[index].u += left.s * avg_div;
         field[index].v += bottom.s * avg_div;
@@ -85,15 +79,15 @@ fn scatter_top_right(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     if field[index].s == 1.0 {
-        let r = index + 1u;
-        let t = index + row_size;
-        let right = field[r];
-        let top = field[t];
+        let right = &field[index + 1u];
+        let top = &field[index + row_size];
         let avg_div = field[index].avg_div;
-        field[r].u -= right.s * avg_div;
-        field[t].v -= top.s * avg_div;
+        (*right).u -= (*right).s * avg_div;
+        (*top).v -= (*top).s * avg_div;
     }
 }
+
+var<workgroup> foo: atomic<u32>;
 
 @compute @workgroup_size(16, 16)
 fn advect_u(ids: Ids) {
@@ -103,6 +97,8 @@ fn advect_u(ids: Ids) {
     let id = ids.global_id;
     let index = id.y * row_size + id.x;
     let here = field[index];
+    let p = &foo;
+    let val = atomicLoad(p);
     field[index].nu = here.u;
     if here.s == 1.0 && field[index - 1u].s == 1.0 {
         let u = here.u;
@@ -139,8 +135,7 @@ fn advect_v(ids: Ids) {
         let p = vec2<f32>(ids.global_id.xy) - vec2(u, v) * dt / cell_size;
         let p_id = clamp(vec2<u32>(floor(p)), vec2(1u, 1u), vec2(row_size - 1u, row_size - 1u));
         let b = p - floor(p);
-//        let a = 1.0 - b;
-        let a = vec2(1.0, 1.0) - b;
+        let a = 1.0 - b;
         let p_index = p_id.y * row_size + p_id.x;
         let nv =
               field[p_index].v * a.x * a.y
@@ -164,7 +159,7 @@ fn advect_density(ids: Ids) {
         let u = (here.u + field[index + 1u].u) / 2.0;
         let v = (here.v + field[index + row_size].v) / 2.0;
         let p = vec2<f32>(ids.global_id.xy) - vec2(u, v) * dt / cell_size;
-        let p_id = vec2<u32>(floor(p));
+        let p_id = clamp(vec2<u32>(floor(p)), vec2(1u, 1u), vec2(row_size - 1u, row_size - 1u));
         let b = p - floor(p);
         let a = 1.0 - b;
         let p_index = p_id.y * row_size + p_id.x;

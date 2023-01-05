@@ -54,7 +54,7 @@ impl Grid {
         }
 
         u[1][height / 2] = 100.0;
-        //u[width + 1][height / 2] = 100.0;
+        u[width + 1][height / 2] = 100.0;
 
         Grid {
             width,
@@ -208,7 +208,7 @@ impl Grid {
                 let _color: Color = [self.p[i][j] / 100000.0, 0.0, 0.0, 1.0].into();
 
                 // Density
-                let rho = self.rho[i][j];
+                let _rho = self.rho[i][j];
                 //let color = [rho, 0.0, 0.0, 1.0].into();
 
                 draw_rectangle(pos.x, pos.y, pixels, pixels, color);
@@ -223,7 +223,7 @@ impl Grid {
                 let pos = pos + vec2(pixels / 2.0, -pixels / 2.0);
                 let d = vec2(u, v) * 2.0;
                 let color: Color = [0.0, 0.0, 1.0, 0.3].into();
-                //draw_line(pos.x, pos.y, pos.x + d.x, pos.y - d.y, 1.0, color);
+                draw_line(pos.x, pos.y, pos.x + d.x, pos.y - d.y, 1.0, color);
             }
         }
     }
@@ -249,6 +249,7 @@ async fn amain() {
     }
 }
 
+#[allow(dead_code)]
 fn cpu_main() {
     let config = Conf {
         window_title: "Euler".to_string(),
